@@ -1,0 +1,285 @@
+version: '3'
+
+services:
+  pihole:
+    image: pihole/pihole:latest
+    hostname: pihole
+    ports:
+      - 53:53/tcp
+      - 53:53/udp
+      - 9102:80/tcp
+    dns:
+      - 127.0.0.1
+      - 1.1.1.1
+    environment:
+      TZ: ${TZ:-Europe/Dublin}
+    volumes:
+      - pihole_data:/etc/pihole/
+      - pihole_dnsmasq:/etc/dnsmasq.d/
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 60s
+      resources:
+        reservations:
+          cpus: '0.1'
+          memory: 35M
+      update_config:
+        delay: 10s
+        order: start-first
+          
+  swag:
+    image: lscr.io/linuxserver/swag:latest
+    hostname: swag
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PUID:-1000}
+      - TZ=${TZ:-Europe/Dublin}
+      - URL=${SSL_URL}
+      - EMAIL=${SSL_EMAIL}
+      - VALIDATION=http
+    volumes:
+      - swag_data:/config/etc
+    ports:
+      - 443:443
+      - 80:80 #optional
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 60s
+      update_config:
+        delay: 10s
+        order: start-first
+    
+  home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    hostname: home-assistant
+    ports:
+      - 9203:9203
+    volumes:
+      - homeassistant_data:/config
+      - /etc/localtime:/etc/localtime:ro
+      - swag_data:/certbot:ro
+    privileged: true
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 1m
+        max_attempts: 3
+        window: 5m
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 250M
+      update_config:
+        delay: 30s
+        order: start-first
+    
+  transmission:
+    image: haugene/transmission-openvpn
+    hostname: transmission
+    ports:
+      - 9091:9091
+      - 9213:9213
+      - 9288:8888
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - OPENVPN_PROVIDER=${OPENVPN_PROVIDER}
+      - OPENVPN_CONFIG=${OPENVPN_CONFIG}
+      - LOCAL_NETWORK=192.168.0.0/22
+      - TZ=GB
+      - CREATE_TUN_DEVICE=true
+      - TRANSMISSION_DOWNLOAD_DIR=/downloads
+      - TRANSMISSION_INCOMPLETE_DIR=/downloads/incomplete
+      - TRANSMISSION_WATCH_DIR=/watch
+      - TRANSMISSION_WATCH_DIR_ENABLED=true
+      - TRANSMISSION_RPC_USERNAME=${TRANSMISSION_RPC_USERNAME}
+      - TRANSMISSION_RPC_PASSWORD=${TRANSMISSION_RPC_PASSWORD}
+      - TRANSMISSION_RPC_AUTHENTICATION_REQUIRED=true
+      - TRANSMISSION_PEER_PORT=9213
+      - TRANSMISSION_RATIO_LIMIT=1
+      - TRANSMISSION_RATIO_LIMIT_ENABLED=true
+      - TRANSMISSION_IDLE_SEEDING_LIMIT_ENABLED=true
+      - TRANSMISSION_IDLE_SEEDING_LIMIT=3600
+      - TRANSMISSION_SPEED_LIMIT_DOWN=15000
+      - TRANSMISSION_SPEED_LIMIT_DOWN_ENABLED=true
+      - TRANSMISSION_SPEED_LIMIT_UP=500
+      - TRANSMISSION_SPEED_LIMIT_UP_ENABLED=true
+      - TRANSMISSION_ALT_SPEED_DOWN=5000
+      - TRANSMISSION_ALT_SPEED_ENABLED=true
+      - TRANSMISSION_ALT_SPEED_TIME_BEGIN=1200
+      - TRANSMISSION_ALT_SPEED_TIME_DAY=62
+      - TRANSMISSION_ALT_SPEED_TIME_ENABLED=true
+      - TRANSMISSION_ALT_SPEED_TIME_END=120
+      - TRANSMISSION_ALT_SPEED_UP=150
+      - TRANSMISSION_WEB_UI=flood-for-transmission
+      - WEBPROXY_ENABLED=true
+      - WEBPROXY_PORT=8888
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1002}
+    volumes:
+      - transmission_config:/config
+      - transmission_data:/data
+      - /mnt/user/downloads:/downloads
+      - /mnt/user/appdata/watch:/watch
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+    secrets:
+        - openvpn_creds
+    restart: unless-stopped
+    
+  transmission-proxy:
+    image: haugene/transmission-openvpn-proxy
+    links:
+      - transmission:transmission
+    ports:
+      - 9291:8080
+    restart: unless-stopped
+    depends_on:
+      - transmission
+    
+  organizr:
+    image: organizr/organizr
+    volumes:
+      - organizr_data:/config
+    ports:
+      - 9210:80
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1002}
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 1m
+        max_attempts: 3
+        window: 5m
+      update_config:
+        delay: 30s
+        order: start-first
+    
+  urbackup:
+    image: uroni/urbackup-server:latest
+    hostname: urbackup
+    ports:
+      - 55413-55415:55413-55415/tcp
+      - 35623:35623/udp
+    volumes:
+      - urbackup_logs:/var/log
+      - urbackup_data:/var/urbackup
+      - /mnt/user/backups/urbackup:/backups
+    environment:
+      - PUID=114
+      - PGID=118
+      - TZ=${TZ:-Europe/Dublin}
+    restart: unless-stopped
+    
+  syncthing:
+    image: syncthing/syncthing:latest
+    hostname: syncthing
+    ports:
+      - 22000:22000/tcp
+      - 22000:22000/udp
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1002}
+    volumes:
+      - syncthing_data:/var/syncthing
+      - /mnt/user/media:/media
+    restart: unless-stopped
+    
+  netdata:
+    image: netdata/netdata
+    hostname: netdata
+    ports:
+      - 19999:19999
+    restart: unless-stopped
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+    environment:
+      - NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN}
+      - NETDATA_CLAIM_URL=https://app.netdata.cloud
+      - NETDATA_CLAIM_ROOMS=
+      
+  mariadb:
+    image: mariadb
+    hostname: mariadb
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+
+  adminer:
+    image: adminer
+    hostname: adminer
+    restart: always
+    ports:
+      - 8899:8080
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 1m
+
+secrets:
+  openvpn_creds:
+    external: true
+
+volumes:
+  pihole_data:
+    external: true
+    name: pihole_data
+  pihole_dnsmasq:
+    external: true
+    name: pihole_dnsmasq
+  swag_data:
+  homeassistant_data:
+    external: true
+    name: homeassistant_data
+  transmission_config:
+    external: true
+    name: transmission_config
+  transmission_data:
+    external: true
+    name: transmission_data
+  organizr_data:
+    external: true
+    name: organizr_data
+  urbackup_data:
+    external: true
+    name: urbackup_data
+  urbackup_logs:
+    external: true
+    name: urbackup_logs
+  syncthing_data:
+    external: true
+    name: syncthing_data
+  netdataconfig:
+    name: netdataconfig
+  netdatalib:
+    name: netdatalib
+  netdatacache:
+    name: netdatacache
