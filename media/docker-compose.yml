@@ -1,0 +1,192 @@
+version: '3'
+
+x-common: &common
+  TZ: ${TZ:-Europe/Dublin}
+  PUID: ${PUID:-1000}
+  PGID: ${PGID:-1002}
+
+services:
+  plex:
+    hostname: plexmediaserver
+    container_name: plex
+    image: plexinc/pms-docker:public
+    environment:
+      TZ: ${TZ:-Europe/Dublin}
+      PLEX_UID: ${PLEX_UID:-116}
+      PLEX_GID: ${PGID:-1002}
+      PLEX_CLAIM: ${PLEX_CLAIM_TOKEN}
+    networks:
+      - infra
+    ports:
+      - 32400:32400/tcp
+      - 32400:32400/udp
+    devices:
+      - /dev/dvb
+    tmpfs:
+      - /transcode:size=4000000000
+    volumes:
+      - ${APPDATA_PATH}/plexmediaserver:/config
+      - ${MEDIA_PATH}:/media
+    restart: unless-stopped
+
+  overseerr:
+    image: sctx/overseerr:latest
+    container_name: overseerr
+    environment:
+      <<: *common
+    ports:
+      - 8855:5055
+    networks:
+      - infra
+    volumes:
+      - overseerr_data:/app/config
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    networks:
+      - infra
+    ports:
+      - 8696:9696
+    environment:
+      <<: *common
+    volumes:
+      - prowlarr_data:/config
+    restart: unless-stopped
+
+  sonarr:
+    image: ghcr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    networks:
+      - infra
+    ports:
+      - 8989:8989
+    environment:
+      <<: *common
+    volumes:
+      - sonarr_data:/config
+      - ${DOWNLOADS_PATH}:/downloads
+      - ${MEDIA_PATH}:/media
+    restart: unless-stopped
+
+  radarr:
+    image: linuxserver/radarr:latest
+    container_name: radarr
+    networks:
+      - infra
+    ports:
+      - 8878:7878
+    environment:
+      <<: *common
+    volumes:
+      - radarr_data:/config
+      - ${DOWNLOADS_PATH}:/downloads
+      - ${MEDIA_PATH}:/media
+    restart: unless-stopped
+
+  doplarr:
+    image: ghcr.io/kiranshila/doplarr:latest
+    container_name: doplarr
+    networks:
+      - infra
+    environment:
+      - SONARR__URL=http://sonarr:8989
+      - RADARR__URL=http://radarr:7878
+      - SONARR__API=${SONARR_API_KEY}
+      - RADARR__API=${RADARR_API_KEY}
+      - DISCORD__TOKEN=${DISCORD_TOKEN}
+    restart: unless-stopped
+    deploy:
+      replicas: 0
+
+  immich-server:
+    container_name: immich_server
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    env_file:
+      - stack.env
+    environment:
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_USERNAME=${DB_USERNAME}
+    volumes:
+      - ${UPLOAD_LOCATION}:/usr/src/app/upload
+      - ${MEDIA_PATH}/photos/:/usr/src/app/photos
+    ports:
+      - '8883:2283'
+    networks:
+      - infra
+    restart: always
+
+  immich-kiosk:
+    image: ghcr.io/damongolding/immich-kiosk:latest
+    container_name: immich_kiosk
+    environment:
+      TZ: ${TZ:-Europe/Dublin}
+      KIOSK_IMMICH_API_KEY: ${IMMICH_KIOSK_KEY}
+      KIOSK_IMMICH_URL: "http://immich_server:2283"
+      KIOSK_IMMICH_EXTERNAL_URL: ${IMMICH_EXTERNAL_URL}
+      KIOSK_ALBUMS: ${IMMICH_KIOSK_ALBUMS}
+      # Clock
+      KIOSK_SHOW_TIME: true
+      KIOSK_TIME_FORMAT: 24
+      KIOSK_SHOW_DATE: true
+      KIOSK_DATE_FORMAT: YYYY/MM/DD
+      KIOSK_CLOCK_SOURCE: client
+      # Kiosk behaviour
+      KIOSK_DURATION: 60
+      KIOSK_DISABLE_SCREENSAVER: true
+      # UI
+      KIOSK_FRAMELESS: true
+      KIOSK_LAYOUT: splitview
+      KIOSK_LIVE_PHOTOS: true
+      KIOSK_TRANSITION: 1
+      KIOSK_SHOW_MORE_INFO_QR_CODE: true
+      # Image metadata
+      # KIOSK_SHOW_OWNER: true
+      KIOSK_SHOW_PERSON_NAME: true
+      KIOSK_SHOW_PERSON_AGE: true
+      KIOSK_SHOW_IMAGE_TIME: true
+      KIOSK_IMAGE_TIME_FORMAT: 24
+      KIOSK_SHOW_IMAGE_DATE: true
+      KIOSK_IMAGE_DATE_FORMAT: YYYY-MM-DD
+      KIOSK_SHOW_IMAGE_LOCATION: true
+    ports:
+      - 3030:3000
+    networks:
+      - infra
+    volumes:
+      - ${APPDATA_PATH}/immich-kiosk:/config
+    restart: always
+
+  database:
+    container_name: immich_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.3.0-pgvectors0.2.0
+    networks:
+      - infra
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
+    volumes:
+      - immich_data:/var/lib/postgresql/data
+    restart: always
+
+networks:
+  infra:
+    name: infra_default
+    external: true
+
+volumes:
+  overseerr_data:
+    name: overseerr_data
+  sonarr_data:
+    external: true
+    name: sonarr_data
+  radarr_data:
+    external: true
+    name: radarr_data
+  prowlarr_data:
+    external: true
+    name: prowlarr_data
+  immich_data:
+    name: immich_data

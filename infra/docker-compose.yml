@@ -1,9 +1,37 @@
 version: '3'
 
+x-tz: &tz
+  TZ: ${TZ:-Europe/Dublin}
+  
+x-user: &user
+  PUID: ${PUID:-1000}
+  PGID: ${PGID:-1002}
+
+x-restart-policy: &restart-policy
+  condition: on-failure
+  delay: 30s
+  max_attempts: 3
+  window: 1m
+
 services:
+  dockerproxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    container_name: dockerproxy
+    environment:
+      - CONTAINERS=1 # Allow access to viewing containers
+      - SERVICES=1 # Allow access to viewing services (necessary when using Docker Swarm)
+      - TASKS=1 # Allow access to viewing tasks (necessary when using Docker Swarm)
+      - POST=0 # Disallow any POST operations (effectively read-only)
+    ports:
+      - 127.0.0.1:2375:2375
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Mounted as read-only
+    restart: unless-stopped
+  
   pihole:
     image: pihole/pihole:latest
     hostname: pihole
+    container_name: pihole
     ports:
       - 53:53/tcp
       - 53:53/udp
@@ -12,166 +40,207 @@ services:
       - 127.0.0.1
       - 1.1.1.1
     environment:
-      TZ: ${TZ:-Europe/Dublin}
+      <<: *tz
     volumes:
       - pihole_data:/etc/pihole/
       - pihole_dnsmasq:/etc/dnsmasq.d/
     deploy:
       restart_policy:
-        condition: on-failure
+        <<: *restart-policy
         delay: 5s
-        max_attempts: 3
-        window: 60s
       resources:
         reservations:
           cpus: '0.1'
           memory: 35M
-      update_config:
-        delay: 10s
-        order: start-first
-          
-  swag:
-    image: lscr.io/linuxserver/swag:latest
-    hostname: swag
+
+  ddns-updater:
+    image: qmcgaw/ddns-updater
+    container_name: ddns-updater
+    hostname: ddns-updater
+    network_mode: bridge
+    ports:
+      - 8800:8000/tcp
+    volumes:
+      - ddns_updater_data:/updater/data
+    environment:
+      - PERIOD=5m
+      - UPDATE_COOLDOWN_PERIOD=5m
+      - PUBLICIP_FETCHERS=all
+      - PUBLICIP_HTTP_PROVIDERS=all
+      - PUBLICIPV4_HTTP_PROVIDERS=all
+      - PUBLICIPV6_HTTP_PROVIDERS=all
+      - PUBLICIP_DNS_PROVIDERS=all
+      - PUBLICIP_DNS_TIMEOUT=3s
+      - HTTP_TIMEOUT=10s
+      # Web UI
+      - LISTENING_ADDRESS=:8000
+      - ROOT_URL=/
+      # Backup
+      - BACKUP_PERIOD=0 # 0 to disable
+      - BACKUP_DIRECTORY=/updater/data
+
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    hostname: nginx-proxy-manager
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PUID:-1000}
-      - TZ=${TZ:-Europe/Dublin}
-      - URL=${SSL_URL}
-      - EMAIL=${SSL_EMAIL}
-      - VALIDATION=http
-    volumes:
-      - swag_data:/config/etc
     ports:
-      - 443:443
-      - 80:80 #optional
-    deploy:
-      restart_policy:
-        condition: on-failure
-        delay: 30s
-        max_attempts: 3
-        window: 60s
-      update_config:
-        delay: 10s
-        order: start-first
-    
+      - '80:80' # Public HTTP Port
+      - '443:443' # Public HTTPS Port
+      - '81:81' # Admin Web Port
+      # Add any other Stream port you want to expose
+      # - '21:21' # FTP
+    environment:
+      <<: *tz
+      # Uncomment this if IPv6 is not enabled on your host
+      # DISABLE_IPV6: 'true'
+    volumes:
+      - nginx_proxy_manager_data:/data
+      - nginx_proxy_manager_config:/etc/letsencrypt
+        
   home-assistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     hostname: home-assistant
+    container_name: homeassistant
     ports:
       - 9203:9203
     volumes:
       - homeassistant_data:/config
       - /etc/localtime:/etc/localtime:ro
-      - swag_data:/certbot:ro
     privileged: true
     deploy:
+      replicas: 0
       restart_policy:
-        condition: on-failure
-        delay: 1m
-        max_attempts: 3
+        <<: *restart-policy
         window: 5m
       resources:
         reservations:
           cpus: '0.5'
           memory: 250M
-      update_config:
-        delay: 30s
-        order: start-first
     
   transmission:
     image: haugene/transmission-openvpn
     hostname: transmission
+    container_name: transmission
     ports:
       - 9091:9091
       - 9213:9213
       - 9288:8888
     dns:
       - 8.8.8.8
-      - 8.8.4.4
+      - 1.1.1.1
     cap_add:
       - NET_ADMIN
     environment:
-      - OPENVPN_PROVIDER=${OPENVPN_PROVIDER}
-      - OPENVPN_CONFIG=${OPENVPN_CONFIG}
-      - LOCAL_NETWORK=192.168.0.0/22
-      - TZ=GB
-      - CREATE_TUN_DEVICE=true
-      - TRANSMISSION_DOWNLOAD_DIR=/downloads
-      - TRANSMISSION_INCOMPLETE_DIR=/downloads/incomplete
-      - TRANSMISSION_WATCH_DIR=/watch
-      - TRANSMISSION_WATCH_DIR_ENABLED=true
-      - TRANSMISSION_RPC_USERNAME=${TRANSMISSION_RPC_USERNAME}
-      - TRANSMISSION_RPC_PASSWORD=${TRANSMISSION_RPC_PASSWORD}
-      - TRANSMISSION_RPC_AUTHENTICATION_REQUIRED=true
-      - TRANSMISSION_PEER_PORT=9213
-      - TRANSMISSION_RATIO_LIMIT=1
-      - TRANSMISSION_RATIO_LIMIT_ENABLED=true
-      - TRANSMISSION_IDLE_SEEDING_LIMIT_ENABLED=true
-      - TRANSMISSION_IDLE_SEEDING_LIMIT=3600
-      - TRANSMISSION_SPEED_LIMIT_DOWN=15000
-      - TRANSMISSION_SPEED_LIMIT_DOWN_ENABLED=true
-      - TRANSMISSION_SPEED_LIMIT_UP=500
-      - TRANSMISSION_SPEED_LIMIT_UP_ENABLED=true
-      - TRANSMISSION_ALT_SPEED_DOWN=5000
-      - TRANSMISSION_ALT_SPEED_ENABLED=true
-      - TRANSMISSION_ALT_SPEED_TIME_BEGIN=1200
-      - TRANSMISSION_ALT_SPEED_TIME_DAY=62
-      - TRANSMISSION_ALT_SPEED_TIME_ENABLED=true
-      - TRANSMISSION_ALT_SPEED_TIME_END=120
-      - TRANSMISSION_ALT_SPEED_UP=150
-      - TRANSMISSION_WEB_UI=flood-for-transmission
-      - WEBPROXY_ENABLED=true
-      - WEBPROXY_PORT=8888
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1002}
+      <<: *user
+      OPENVPN_PROVIDER: ${VPN_PROVIDER}
+      # OPENVPN_CONFIG: Luxembourg-UDP
+      OPENVPN_CONFIG: ${VPN_CONFIG}
+      # OPENVPN_CONFIG: Belgium1-UDP
+      OPENVPN_USERNAME: ${VPN_USERNAME}
+      OPENVPN_PASSWORD: ${VPN_PASSWORD}
+      LOCAL_NETWORK: ${LOCAL_NETWORK:-192.168.0.0/22}
+      TZ: GB
+      CREATE_TUN_DEVICE: "true"
+      TRANSMISSION_DOWNLOAD_DIR: /downloads
+      TRANSMISSION_INCOMPLETE_DIR: /downloads/incomplete
+      TRANSMISSION_WATCH_DIR: /watch
+      TRANSMISSION_WATCH_DIR_ENABLED: "true"
+      TRANSMISSION_RPC_USERNAME: ${TR_USER}
+      TRANSMISSION_RPC_PASSWORD: ${TR_PASS}
+      TRANSMISSION_RPC_AUTHENTICATION_REQUIRED: "true"
+      TRANSMISSION_PEER_PORT: 9213
+      TRANSMISSION_RATIO_LIMIT: 1
+      TRANSMISSION_RATIO_LIMIT_ENABLED: "true"
+      TRANSMISSION_IDLE_SEEDING_LIMIT_ENABLED: "true"
+      TRANSMISSION_IDLE_SEEDING_LIMIT: 10080
+      TRANSMISSION_SPEED_LIMIT_DOWN: 15000
+      TRANSMISSION_SPEED_LIMIT_DOWN_ENABLED: "true"
+      TRANSMISSION_SPEED_LIMIT_UP: 500
+      TRANSMISSION_SPEED_LIMIT_UP_ENABLED: "true"
+      TRANSMISSION_ALT_SPEED_DOWN: 5000
+      TRANSMISSION_ALT_SPEED_ENABLED: "true"
+      TRANSMISSION_ALT_SPEED_TIME_BEGIN: 1200
+      TRANSMISSION_ALT_SPEED_TIME_DAY: 62
+      TRANSMISSION_ALT_SPEED_TIME_ENABLED: "true"
+      TRANSMISSION_ALT_SPEED_TIME_END: 120
+      TRANSMISSION_ALT_SPEED_UP: 150
+      TRANSMISSION_WEB_UI: flood-for-transmission
+      WEBPROXY_ENABLED: "true"
+      WEBPROXY_PORT: 8888
     volumes:
+      #- /mnt/user/appdata/vpn:/etc/openvpn/custom
       - transmission_config:/config
-      - transmission_data:/data
-      - /mnt/user/downloads:/downloads
-      - /mnt/user/appdata/watch:/watch
+      - ${DOWNLOADS_PATH}:/downloads
+      - ${APPDATA_PATH}/watch:/watch
     logging:
       driver: json-file
       options:
         max-size: 10m
-    secrets:
-        - openvpn_creds
-    restart: unless-stopped
+    deploy:
+      restart_policy:
+        <<: *restart-policy
+        window: 5m
+      resources:
+        limits:
+          memory: 6G
     
   transmission-proxy:
     image: haugene/transmission-openvpn-proxy
-    links:
-      - transmission:transmission
+    container_name: transmission-proxy
+    hostname: transmission-proxy
+    #links:
+    #  - transmission:transmission
     ports:
       - 9291:8080
     restart: unless-stopped
     depends_on:
       - transmission
-    
-  organizr:
-    image: organizr/organizr
+
+  airdcpp:
+    image: gangefors/airdcpp-webclient
+    container_name: airdcpp
+    hostname: airdcpp
     volumes:
-      - organizr_data:/config
-    ports:
-      - 9210:80
+      - airdcpp:/.airdcpp
+      - ${DOWNLOADS_PATH}:/downloads
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1002}
+      <<: *tz
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: ${UMASK:-0022}
+    ports:
+      - 9206:5600
+      - 9207:5601
+      - 21248:21248
+      - 21248:21248/udp
+      - 21249:21249
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    hostname: homepage
+    container_name: homepage
+    ports:
+      - 3000:3000
+    volumes:
+      - /mnt/user/appdata/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      <<: *user
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
+      # GF_SERVER_ROOT_URL: https://kapeer.no-ip.info/homepage
+      # GF_SERVER_DOMAIN: https://kapeer.no-ip.info/
     deploy:
       restart_policy:
-        condition: on-failure
-        delay: 1m
-        max_attempts: 3
+        <<: *restart-policy
         window: 5m
-      update_config:
-        delay: 30s
-        order: start-first
     
   urbackup:
     image: uroni/urbackup-server:latest
     hostname: urbackup
+    container_name: urbackup
     ports:
       - 55413-55415:55413-55415/tcp
       - 35623:35623/udp
@@ -180,27 +249,14 @@ services:
       - urbackup_data:/var/urbackup
       - /mnt/user/backups/urbackup:/backups
     environment:
-      - PUID=114
-      - PGID=118
-      - TZ=${TZ:-Europe/Dublin}
-    restart: unless-stopped
-    
-  syncthing:
-    image: syncthing/syncthing:latest
-    hostname: syncthing
-    ports:
-      - 22000:22000/tcp
-      - 22000:22000/udp
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1002}
-    volumes:
-      - syncthing_data:/var/syncthing
-      - /mnt/user/media:/media
+      <<: *tz
+      PUID: 114
+      PGID: 118
     restart: unless-stopped
     
   netdata:
     image: netdata/netdata
+    container_name: netdata
     hostname: netdata
     ports:
       - 19999:19999
@@ -219,67 +275,79 @@ services:
       - /sys:/host/sys:ro
       - /etc/os-release:/host/etc/os-release:ro
     environment:
-      - NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN}
+      - NETDATA_CLAIM_TOKEN=${NETDATA_TOKEN}
       - NETDATA_CLAIM_URL=https://app.netdata.cloud
       - NETDATA_CLAIM_ROOMS=
-      
-  mariadb:
-    image: mariadb
-    hostname: mariadb
-    restart: always
-    environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
 
-  adminer:
-    image: adminer
-    hostname: adminer
-    restart: always
+  filebrowser:
+    image: filebrowser/filebrowser:s6
+    hostname: filebrowser
+    container_name: filebrowser
     ports:
-      - 8899:8080
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-        delay: 30s
-        max_attempts: 3
-        window: 1m
+      - 8980:80
+    volumes:
+      - /mnt/user/:/mnt/user
+      - filebrowser_data:/config
+      - filebrowser_db:/database
+    labels:
+      com.docker-tc.enabled: 1
+      com.docker-tc.limit: 15mbps
+    restart: unless-stopped
 
-secrets:
-  openvpn_creds:
-    external: true
+  neko-tor:
+    image: ghcr.io/m1k1o/neko/tor-browser:latest
+    hostname: neko-tor
+    container_name: neko-tor
+    shm_size: "2gb"
+    ports:
+      - "9081:8080"
+      - "56300-56400:56300-56400/udp"
+    environment:
+      NEKO_DESKTOP_SCREEN: 1920x1080@30
+      NEKO_WEBRTC_EPR: "56300-56400"
+      NEKO_WEBRTC_NAT1TO1: ${NEKO_WEBRTC_NAT1TO1}
+      NEKO_MEMBER_MULTIUSER_USER_PASSWORD: ${NEKO_USER_PASSWORD}
+      NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD: ${NEKO_ADMIN_PASSWORD}
+    deploy:
+      replicas: 0
+      restart_policy:
+        <<: *restart-policy
 
 volumes:
-  pihole_data:
+  pihole_data: &external-volume
     external: true
     name: pihole_data
   pihole_dnsmasq:
-    external: true
+    <<: *external-volume
     name: pihole_dnsmasq
-  swag_data:
+  ddns_updater_data:
+    name: ddns_updater_data
+  nginx_proxy_manager_data:
+    name: nginx_proxy_manager_data
+  nginx_proxy_manager_config:
+    name: nginx_proxy_manager_config
   homeassistant_data:
-    external: true
+    <<: *external-volume
     name: homeassistant_data
   transmission_config:
-    external: true
+    <<: *external-volume
     name: transmission_config
-  transmission_data:
-    external: true
-    name: transmission_data
-  organizr_data:
-    external: true
-    name: organizr_data
+  airdcpp:
+    driver: local
+    name: airdcpp
   urbackup_data:
-    external: true
+    <<: *external-volume
     name: urbackup_data
   urbackup_logs:
-    external: true
+    <<: *external-volume
     name: urbackup_logs
-  syncthing_data:
-    external: true
-    name: syncthing_data
   netdataconfig:
     name: netdataconfig
   netdatalib:
     name: netdatalib
   netdatacache:
     name: netdatacache
+  filebrowser_data:
+    name: filebrowser_data
+  filebrowser_db:
+    name: filebrowser_db

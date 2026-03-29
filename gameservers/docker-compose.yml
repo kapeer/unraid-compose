@@ -1,0 +1,260 @@
+version: "3"
+
+x-common: &common
+  labels:
+    type: gameserver
+  networks:
+    - infra
+x-owners: &owners
+  UID: ${PUID:-1000}
+  GID: ${PGID:-1000}
+x-steam: &steam
+  <<: *owners
+  LOG_OUTPUT: "true"
+x-restart-policy: &restart-policy
+  condition: on-failure
+  delay: 60s
+  max_attempts: 3
+  window: 10m
+
+services:
+  redbot:
+    hostname: redbot
+    container_name: redbot
+    image: phasecorex/red-discordbot
+    networks:
+      - infra
+    volumes:
+      - redbot_data:/data
+    environment:
+      TZ: ${TZ:-Europe/Dublin}
+      PUID: ${PUID:-1000}
+      RED_TOKEN: ${DISCORD_TOKEN}
+      PREFIX: ">"
+    restart: unless-stopped
+    
+  discord-irc:
+    hostname: discord-irc
+    container_name: discord-irc
+    image: discordirc/discord-irc
+    networks:
+      - infra
+    volumes:
+      - ${APP_PATH}/discord-irc:/config
+    depends_on:
+      - redbot
+    restart: unless-stopped
+    
+  discord-7dtd:
+    hostname: discord-7dtd
+    container_name: discord-7dtd
+    image: kap33r/dishorde:latest
+    networks:
+      - infra
+    volumes:
+      - ${APP_PATH}/7dtd-discord/config.json:/bot/Dishorde/config.json
+    depends_on:
+      - redbot
+    restart: unless-stopped
+      
+  openssh-server:
+    image: lscr.io/linuxserver/openssh-server:latest
+    hostname: openssh-server
+    container_name: openssh-server
+    networks:
+      - infra
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Europe/Dublin}
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD_FILE=${SSH_PWD_FILE}
+      - USER_NAME=${SSH_USER}
+    volumes:
+      - ${APP_PATH}:${APP_PATH}
+    ports:
+      - 2222:2222
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        window: 30s
+        
+  mumble-server:
+    image: mumblevoip/mumble-server:latest
+    container_name: mumble-server
+    hostname: mumble-server
+    ports:
+      - 64738:64738
+    environment:
+      MUMBLE_CONFIG_SERVER_PASSWORD: ${MUMBLE_SERVER_PWD}
+      MUMBLE_SUPERUSER_PASSWORD: ${MUMBLE_SUPER_PWD}
+    volumes:
+      - mumble_data:/data
+    restart: on-failure
+    
+  7dtd:
+    <<: *common
+    hostname: 7dtd
+    container_name: 7dtd
+    image: ich777/steamcmd:7dtd
+    ports:
+      - 26888-26890:26888-26890
+      - 26900:26900/tcp
+      - 26900-26903:26900-26903/udp
+    environment:
+      <<: *steam
+      GAME_ID: 294420
+      SERVERCONFIG: sdtdserverconfig.xml
+      LOG_TIMESTAMP: "false"
+      GAME_PARAMS: -quit -batchmode -nographics -dedicated
+      BACKUP_FILES: "true"
+      BACKUP_INTERVAL: 720
+      BACKUP_TO_KEEP: 2
+      VALIDATE: "true"
+    volumes:
+      - steamcmd_data:/serverdata/steamcmd
+      - type: bind
+        source: ${APP_PATH}/7dtd
+        target: /serverdata/serverfiles
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 1
+      restart_policy:
+        <<: *restart-policy
+        window: 15m
+
+  rust:
+    <<: *common
+    hostname: rust
+    container_name: rust
+    image: ich777/steamcmd:rust
+    ports:
+      - 28015:28015/udp
+      - 28016:28016/tcp
+      - 28083:28083/tcp
+    environment:
+      <<: *steam
+      GAME_ID: 258550
+      SERVER_NAME: SFORA Fun Server
+      SERVER_DISCRIPTION: Rust Server in docker
+      GAME_PORT: 28015
+      GAME_PARAMS: +server.tickrate 30 +server.identity "rustserver" +server.gamemode vanilla +server.seed 57064 +server.maxplayers 20 +server.worldsize 4000 +server.saveinterval 300 +rcon.web 1 +rcon.password "${RUST_RCON_PWD}" +rcon.port 28016
+    volumes:
+      - steamcmd_data:/serverdata/steamcmd
+      - type: bind
+        source: ${APP_PATH}/rust
+        target: /serverdata/serverfiles
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 0
+      restart_policy: *restart-policy
+
+  palworld:
+    <<: *common
+    hostname: palworld
+    container_name: palworld
+    image: ich777/steamcmd:palworld
+    ports:
+    - 8211:8211/udp
+    - 25575:25575
+    environment:
+      <<: *steam
+      GAME_ID: 2394010
+      SRV_ADMIN_PWD: ${PALWORLD_PWD}
+      UPDATE_PUBLIC_IP: true
+      GAME_PARAMS: EpicApp=PalServer
+      GAME_PARAMS_EXTRA: -No-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS
+      BACKUP: true
+      BACKUP_INTERVAL: 120
+      BACKUPS_TO_KEEP: 6
+    volumes:
+      - steamcmd_data:/serverdata/steamcmd
+      - type: bind
+        source: ${APP_PATH}/palworld
+        target: /serverdata/serverfiles
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 0
+      restart_policy: *restart-policy
+
+  mcatm10:
+    <<: *common
+    hostname: mcatm10
+    container_name: mcatm10
+    image: itzg/minecraft-server
+    environment:
+      <<: *owners
+      EULA: "TRUE"
+      TYPE: "NEOFORGE"
+      VERSION: "1.21.1"
+      NEOFORGE_VERSION: "21.1.214"
+      OVERRIDE_SERVER_PROPERTIES: "TRUE"
+      MAX_MEMORY: 12G
+      SERVER_PORT: 9013
+      RCON_PORT: 9014
+      RCON_PASSWORD: "${MC_RCON_PWD}"
+      MAX_PLAYERS: 10
+      MOTD: "Minecraft ATM 10"
+      OPS: ${MC_OPS}
+      ENFORCE_WHITELIST: "true"
+    ports:
+      - 9013-9014:9013-9014
+    volumes:
+      - type: bind
+        source: ${APP_PATH}/mcatm10
+        target: /data
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 0
+      restart_policy: *restart-policy      
+
+  mcbds:
+    <<: *common
+    image: itzg/minecraft-bedrock-server
+    hostname: mcbds
+    container_name: mcbds
+    environment:
+      <<: *owners
+      EULA: "TRUE"
+      SERVER_NAME: "B&B World"
+    ports:
+      - "19132:19132/udp"
+    networks:
+      br0:
+        ipv4_address: ${MC_BEDROCK_IP}
+    mac_address: ${MC_BEDROCK_MAC}
+    volumes:
+      - type: bind
+        source: ${APP_PATH}/mcbds
+        target: /data
+        bind:
+          create_host_path: true
+    stdin_open: true
+    tty: true
+    deploy:
+      replicas: 0
+      restart_policy: *restart-policy
+
+networks:
+  infra:
+    name: infra_default
+    external: true
+  br0:
+    name: br0
+    external: true
+    
+volumes:
+  mumble_data:
+    name: mumble_data
+  steamcmd_data:
+    name: steamcmd_data
+  redbot_data:
+    external: true
+    name: redbot_data
+  arma_steamcmd_data:
+    name: arma_steamcmd_data
