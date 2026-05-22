@@ -1,0 +1,173 @@
+version: '3'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    hostname: ollama
+    container_name: ollama
+    runtime: nvidia
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - 11434:11434
+    networks:
+      - llm
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: 12.0
+          memory: 12G
+        reservations:
+          cpus: 6.0
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
+    cpu_shares: 1024
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    hostname: open-webui
+    container_name: open-webui
+    ports:
+      - 3080:8080
+    networks:
+      - llm
+      - infra
+    environment:
+      WEBUI_URL: ${WEBUI_URL}
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET}
+    volumes:
+      - open-webui_data:/app/backend/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  openedai-speech:
+    image: ghcr.io/matatonic/openedai-speech:latest
+    hostname: openedai-speech
+    container_name: openedai-speech
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - 3800:8000
+    networks:
+      - llm
+    volumes:
+      - openedai_voices_data:/app/voices
+      - openedai_config_data:/app/config
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      TTS_HOME: nvidia # This tells the app to prioritize NVIDIA/CUDA
+      # - PRELOAD_MODELS=true # Optional: Loads models into VRAM on startup
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
+
+  piper-tts:
+    image: kap33r/piper1-gpl:latest
+    # image: rhasspy/wyoming-piper:latest
+    container_name: piper-tts
+    hostname: piper-tts
+    ports:
+      - 5000:5000
+      # - 10200:10200
+    networks:
+      - llm
+    volumes:
+      - /mnt/user/appdata/llm/tts:/data
+    command: server -m pl_PL-gosia-medium
+    # command: --uri 'tcp://0.0.0.0:10200' --voice pl_PL-gosia-medium
+    restart: always
+    deploy:
+      replicas: 0
+
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest-cuda
+    hostname: comfyui
+    container_name: comfyui
+    ports:
+      - 7188:8188
+      - 1111:1111
+    networks:
+      - llm
+    environment:
+      DIRECT_ADDRESS: ${HOST_IP}
+      WEB_ENABLE_AUTH: false
+      AUTH_MODE: none
+      CLI_ARGS: --listen 0.0.0.0 --port 8188 --highvram
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+    volumes:
+      - comfyui_data:/opt/ComfyUI
+    deploy:
+      replicas: 0
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          cpus: 8.0
+          memory: 12G
+    # cpu_shares: 512
+
+  forge:
+    image: ghcr.io/ai-dock/stable-diffusion-webui-forge:latest-cuda
+    hostname: sd-forge
+    container_name: sd-forge
+    runtime: nvidia
+    environment:
+      DIRECT_ADDRESS: ${HOST_IP}
+      FORGE_PORT_HOST: 7860
+      FORGE_ARGS: --listen --api --unet-in-fp8-e4m3fn --pin-shared-memory --enable-insecure-extension-access
+    ports:
+      - 7860:17860
+      - 1111:1111
+    networks:
+      - llm
+    volumes:
+      - sd_forge_data:/workspace
+      - sd_forge_opt:/opt/stable-diffusion-webui-forge
+      - sd_forge_ssh:/root/.ssh/authorized_keys_mount
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+networks:
+  infra:
+    name: infra_default
+    external: true
+  llm:
+    name: llm
+
+volumes:
+  ollama_data:
+  open-webui_data:
+  openedai_voices_data:
+  openedai_config_data:
+  comfyui_data:
+  sd_forge_data:
+  sd_forge_opt:
+  sd_forge_ssh:
