@@ -103,8 +103,6 @@ services:
   immich-server:
     container_name: immich_server
     image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
-    env_file:
-      - stack.env
     environment:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_USERNAME=${DB_USERNAME}
@@ -116,6 +114,24 @@ services:
     networks:
       - infra
     restart: always
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}-cuda
+    volumes:
+      - model_data:/cache
+    networks:
+      - infra
+    restart: always
+    healthcheck:
+      disable: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
 
   immich-kiosk:
     image: ghcr.io/damongolding/immich-kiosk:latest
@@ -190,3 +206,5 @@ volumes:
     name: prowlarr_data
   immich_data:
     name: immich_data
+  model_data:
+    name: model_data
