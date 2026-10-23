@@ -1,5 +1,3 @@
-version: '3'
-
 x-common: &common
   TZ: ${TZ:-Europe/Dublin}
   PUID: ${PUID:-1000}
@@ -15,6 +13,8 @@ services:
       PLEX_UID: ${PLEX_UID:-116}
       PLEX_GID: ${PGID:-1002}
       PLEX_CLAIM: ${PLEX_CLAIM_TOKEN}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     networks:
       - infra
     ports:
@@ -28,6 +28,29 @@ services:
       - ${APPDATA_PATH}/plexmediaserver:/config
       - ${MEDIA_PATH}:/media
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
+
+  tautulli:
+    image: tautulli/tautulli:latest
+    hostname: tautulli
+    container_name: tautulli
+    networks:
+      - infra
+    ports:
+      - 8181:8181
+    environment:
+      <<: *common
+    volumes:
+      - tautulli_data:/config
+    restart: unless-stopped
+    depends_on:
+      - plex
 
   overseerr:
     image: sctx/overseerr:latest
@@ -43,8 +66,9 @@ services:
     restart: unless-stopped
 
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
+    image: linuxserver/prowlarr:latest
     container_name: prowlarr
+    hostname: prowlarr
     networks:
       - infra
     ports:
@@ -55,9 +79,28 @@ services:
       - prowlarr_data:/config
     restart: unless-stopped
 
+  flaresolverr:
+    image: flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    hostname: flaresolverr
+    networks:
+      - infra
+    environment:
+      <<: *common
+      LOG_LEVEL: info
+    ports:
+      - 8191:8191
+    deploy:
+      restart_policy:
+        condition: unless-stopped
+      resources:
+        limits:
+          memory: 2G
+
   sonarr:
     image: ghcr.io/linuxserver/sonarr:latest
     container_name: sonarr
+    hostname: sonarr
     networks:
       - infra
     ports:
@@ -68,11 +111,17 @@ services:
       - sonarr_data:/config
       - ${DOWNLOADS_PATH}:/downloads
       - ${MEDIA_PATH}:/media
-    restart: unless-stopped
+    deploy:
+      restart_policy:
+        condition: unless-stopped
+      resources:
+        limits:
+          memory: 3G
 
   radarr:
     image: linuxserver/radarr:latest
     container_name: radarr
+    hostname: radarr
     networks:
       - infra
     ports:
@@ -85,24 +134,85 @@ services:
       - ${MEDIA_PATH}:/media
     restart: unless-stopped
 
-  doplarr:
-    image: ghcr.io/kiranshila/doplarr:latest
-    container_name: doplarr
+  # doplarr:
+  #   image: ghcr.io/kiranshila/doplarr:latest
+  #   container_name: doplarr
+  #   networks:
+  #     - infra
+  #   environment:
+  #     - SONARR__URL=http://sonarr:8989
+  #     - RADARR__URL=http://radarr:7878
+  #     - SONARR__API=${SONARR_API_KEY}
+  #     - RADARR__API=${RADARR_API_KEY}
+  #     - DISCORD__TOKEN=${DISCORD_TOKEN}
+  #   restart: unless-stopped
+  #   deploy:
+  #     replicas: 0
+
+  bazarr:
+    image: linuxserver/bazarr
+    hostname: bazarr
+    container_name: bazarr
     networks:
       - infra
+    ports:
+      - 9067:6767
     environment:
-      - SONARR__URL=http://sonarr:8989
-      - RADARR__URL=http://radarr:7878
-      - SONARR__API=${SONARR_API_KEY}
-      - RADARR__API=${RADARR_API_KEY}
-      - DISCORD__TOKEN=${DISCORD_TOKEN}
+      <<: *common
+    volumes:
+      - bazarr_data:/config
+      - /mnt/user/media:/media
+    restart: unless-stopped
+    depends_on:
+      - sonarr
+      - radarr
+    deploy:
+      replicas: 1
+
+  readarr:
+    image: linuxserver/readarr:0.4.18-develop
+    hostname: readarr
+    container_name: readarr
+    environment:
+      <<: *common
+    volumes:
+      - readarr_data:/config
+      - /mnt/user/media:/media
+      - /mnt/user/downloads:/downloads
+    ports:
+      - 8787:8787
+    networks:
+      - infra
     restart: unless-stopped
     deploy:
-      replicas: 0
+      replicas: 1
+
+  lidarr:
+    image: linuxserver/lidarr
+    hostname: lidarr
+    container_name: lidarr
+    networks:
+      - infra
+    ports:
+      - 8686:8686
+    environment:
+      <<: *common
+      UMASK_SET: 002
+    volumes:
+      - lidarr_data:/config
+      - /mnt/user/downloads:/downloads
+      - /mnt/user/media:/media
+    depends_on:
+      - prowlarr
+    restart: unless-stopped
+    deploy:
+      replicas: 1
 
   immich-server:
     container_name: immich_server
     image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    # env_file:
+    #   - stack.env
     environment:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_USERNAME=${DB_USERNAME}
@@ -117,9 +227,16 @@ services:
 
   immich-machine-learning:
     container_name: immich_machine_learning
+    # For hardware acceleration, add one of -[armnn, cuda, rocm, openvino, rknn] to the image tag.
+    # Example tag: ${IMMICH_VERSION:-release}-cuda
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}-cuda
+    # extends: # uncomment this section for hardware acceleration - see https://immich.app/docs/features/ml-hardware-acceleration
+    #   file: hwaccel.ml.yml
+    #   service: cpu # set to one of [armnn, cuda, rocm, openvino, openvino-wsl, rknn] for accelerated inference - use the `-wsl` version for WSL2 where applicable
     volumes:
       - model_data:/cache
+    # env_file:
+    #   - .env
     networks:
       - infra
     restart: always
@@ -174,6 +291,15 @@ services:
       - ${APPDATA_PATH}/immich-kiosk:/config
     restart: always
 
+  redis:
+    container_name: redis
+    image: docker.io/valkey/valkey:9@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9
+    networks:
+      - infra
+    healthcheck:
+      test: redis-cli ping || exit 1
+    restart: always
+
   database:
     container_name: immich_postgres
     image: ghcr.io/immich-app/postgres:14-vectorchord0.3.0-pgvectors0.2.0
@@ -187,12 +313,68 @@ services:
       - immich_data:/var/lib/postgresql/data
     restart: always
 
+  ytdl:
+    image: tzahi12345/youtubedl-material:latest
+    container_name: ytdl
+    hostname: ytdl
+    ports:
+      - 17442:17442
+    environment:
+      UID: ${PUID:-1000}
+      GID: ${PGID:-1002}
+      ALLOW_CONFIG_MUTATIONS: 'true'
+      ytdl_mongodb_connection_string: 'mongodb://mongo-db:27017'
+      ytdl_use_local_db: 'false'
+      write_ytdl_config: 'true'
+    networks:
+      - infra
+    volumes:
+      - ytdl_data:/app/appdata
+      - /mnt/user/downloads/MUSIC/:/app/audio
+      - /mnt/user/downloads/MOVIES/:/app/video
+    restart: always
+
+  handbrake:
+    image: zocker160/handbrake-nvenc:latest
+    hostname: handbrake
+    container_name: handbrake
+    runtime: nvidia
+    environment:
+      AUTOMATED_CONVERSION_FORMAT: mp4
+      AUTOMATED_CONVERSION_PRESET: HQ 2160p60 4K CFR
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+    ports:
+      - 5858:5800  # WebUI
+      #- 5900:5900 # VNC
+    devices:
+      - /dev/dri:/dev/dri
+    networks:
+      - infra
+    volumes:
+      - handbrake_data:/config:rw
+      - /mnt/user/media:/storage:ro
+      - /mnt/user/video/watch:/watch:rw
+      - /mnt/user/video/output:/output:rw
+    restart: unless-stopped 
+    deploy:
+      replicas: 0
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
+              capabilities: [gpu]
+
 networks:
   infra:
     name: infra_default
     external: true
 
 volumes:
+  tautulli_data:
+    external: true
+    name: tautulli_data
   overseerr_data:
     name: overseerr_data
   sonarr_data:
@@ -204,7 +386,20 @@ volumes:
   prowlarr_data:
     external: true
     name: prowlarr_data
+  readarr_data:
+    name: readarr_data
+    external: true
+  lidarr_data:
+    name: lidarr_data
+    external: true
+  bazarr_data:
+    name: bazarr_data
+    external: true
   immich_data:
     name: immich_data
   model_data:
     name: model_data
+  ytdl_data:
+    name: ytdl_data
+  handbrake_data:
+    name: handbrake_data

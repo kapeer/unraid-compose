@@ -43,7 +43,12 @@ services:
       - ${APP_PATH}/discord-irc:/config
     depends_on:
       - redbot
-    restart: unless-stopped
+      - 7dtd
+    deploy:
+      replicas: 0
+      restart_policy:
+        <<: *restart-policy
+        window: 15m
     
   discord-7dtd:
     hostname: discord-7dtd
@@ -55,7 +60,12 @@ services:
       - ${APP_PATH}/7dtd-discord/config.json:/bot/Dishorde/config.json
     depends_on:
       - redbot
-    restart: unless-stopped
+      - 7dtd
+    deploy:
+      replicas: 0
+      restart_policy:
+        <<: *restart-policy
+        window: 15m
       
   openssh-server:
     image: lscr.io/linuxserver/openssh-server:latest
@@ -120,6 +130,44 @@ services:
         bind:
           create_host_path: true
     deploy:
+      replicas: 0
+      restart_policy:
+        <<: *restart-policy
+        window: 15m
+    
+  7dtd-experimental2:
+    <<: *common
+    hostname: 7dtd-experimental2
+    container_name: 7dtd-experimental2
+    image: ich777/steamcmd:7dtd
+    ipc: host # <-
+    ports:
+      - 26888-26890:26888-26890
+      - 26900:26900/tcp
+      - 26900-26903:26900-26903/udp
+    environment:
+      <<: *steam
+      GAME_ID: 294420 -beta latest_experimental
+      LOG_TIMESTAMP: "false"
+      GAME_PARAMS: -quit -batchmode -nographics -dedicated -useHugePages # <-
+      BACKUP_FILES: "true"
+      BACKUP_INTERVAL: 720
+      BACKUP_TO_KEEP: 2
+    volumes:
+      - steamcmd_data:/serverdata/steamcmd
+      - type: bind
+        source: /mnt/user/appdata/gameservers/7dtd-experimental2
+        target: /serverdata/serverfiles
+        bind:
+          create_host_path: true
+    ulimits:
+      nofile:
+        soft: 10240
+        hard: 10240
+      memlock:    # <-
+        soft: -1  # <-
+        hard: -1  # <-
+    deploy:
       replicas: 1
       restart_policy:
         <<: *restart-policy
@@ -152,10 +200,10 @@ services:
       replicas: 0
       restart_policy: *restart-policy
 
-  palworld:
+  palworldv1:
     <<: *common
-    hostname: palworld
-    container_name: palworld
+    hostname: palworld_v1
+    container_name: palworld_v1
     image: ich777/steamcmd:palworld
     ports:
     - 8211:8211/udp
@@ -163,17 +211,19 @@ services:
     environment:
       <<: *steam
       GAME_ID: 2394010
-      SRV_ADMIN_PWD: ${PALWORLD_PWD}
-      UPDATE_PUBLIC_IP: true
-      GAME_PARAMS: EpicApp=PalServer
-      GAME_PARAMS_EXTRA: -No-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS
-      BACKUP: true
-      BACKUP_INTERVAL: 120
-      BACKUPS_TO_KEEP: 6
+      PORT: 8211 # Optional but recommended
+      PLAYERS: 16 # Optional but recommended
+      SERVER_PASSWORD: ${PALWORLD_PWD} # Optional but recommended
+      TZ: "UTC"
+      ADMIN_PASSWORD: ${PALWORLD_ADMIN_PWD} 
+      COMMUNITY: false  # Enable this if you want your server to show up in the community servers tab, USE WITH SERVER_PASSWORD!
+      SERVER_NAME: "Bazinga"
+      SERVER_DESCRIPTION: "Bazinga Server"
+      CROSSPLAY_PLATFORMS: "(Steam,Xbox,PS5,Mac)"
     volumes:
       - steamcmd_data:/serverdata/steamcmd
       - type: bind
-        source: ${APP_PATH}/palworld
+        source: ${APP_PATH}/palworld_v1
         target: /serverdata/serverfiles
         bind:
           create_host_path: true
@@ -211,6 +261,76 @@ services:
           create_host_path: true
     deploy:
       replicas: 0
+      restart_policy: *restart-policy   
+      
+  mcForge:
+    <<: *common
+    hostname: mcForge
+    container_name: mcForge
+    image: itzg/minecraft-server
+    shm_size: '2gb' # <-
+    ulimits:        # <-
+      memlock:      # <-
+        soft: -1    # <-
+        hard: -1    # <-
+    environment:
+      <<: *owners
+      EULA: "TRUE"
+      TYPE: "FORGE"
+      VERSION: "1.20.1"
+      FORGE_VERSION: "47.4.10"
+      OVERRIDE_SERVER_PROPERTIES: "TRUE"
+      MAX_MEMORY: 8G
+      JVM_OPTS: "-XX:+UseLargePages" # <-
+      SERVER_PORT: 9013
+      RCON_PORT: 9014
+      RCON_PASSWORD: "${MC_RCON_PWD}"
+      MAX_PLAYERS: 10
+      MOTD: "Bazzzingowe QSMP"
+      OPS: ${MC_OPS}
+      ENFORCE_WHITELIST: "true"
+    ports:
+      - 9013-9014:9013-9014
+    volumes:
+      - type: bind
+        source: ${APP_PATH}/mcForge
+        target: /data
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 0
+      restart_policy: *restart-policy
+      
+  mcPOK:
+    <<: *common
+    hostname: mcPOK
+    container_name: mcPOK
+    image: itzg/minecraft-server
+    environment:
+      <<: *owners
+      EULA: "TRUE"
+      TYPE: "NEOFORGE"
+      VERSION: "1.21.1"
+      FORGE_VERSION: "21.1.222"
+      OVERRIDE_SERVER_PROPERTIES: "TRUE"
+      MAX_MEMORY: 8G
+      SERVER_PORT: 9010
+      RCON_PORT: 9011
+      RCON_PASSWORD: "${MC_RCON_PWD}"
+      MAX_PLAYERS: 10
+      MOTD: "Bazingowe Pokemony"
+      OPS: ${MC_OPS}
+      ENFORCE_WHITELIST: "true"
+    ports:
+      - 9010-9011:9010-9011
+    volumes:
+      - type: bind
+        source: ${APP_PATH}/mcPOK
+        target: /data
+        bind:
+          create_host_path: true
+    deploy:
+      replicas: 0
       restart_policy: *restart-policy      
 
   mcbds:
@@ -240,6 +360,78 @@ services:
       replicas: 0
       restart_policy: *restart-policy
 
+
+  valheim:
+     <<: *common
+     hostname: valheim
+     container_name: valheim
+     image: ich777/steamcmd:valheim
+     ports:
+       - 9013-9014:2456-2457/udp
+     environment:
+       <<: *steam
+       SRV_NAME: SFORA Fun Server
+       SRV_PWD: ${VALHEIM_PWD}
+       WORLD_NAME: Bazzzinga
+       GAME_PARAMS: -savedir /serverdata/serverfiles/.config/unity3d/IronGate/Valheim
+     volumes:
+       - steamcmd_data:/serverdata/steamcmd
+       - type: bind
+         source: ${APP_PATH}/valheim
+         target: /serverdata/serverfiles
+         bind:
+           create_host_path: true
+     deploy:
+       replicas: 0
+       restart_policy:
+         <<: *restart-policy
+         window: 5m
+
+
+  enshrouded:
+     <<: *common
+     hostname: enshrouded
+     container_name: enshrouded
+     image: mornedhels/enshrouded-server:latest
+     ports:
+       - 9013:15637/udp
+     environment:
+       <<: *steam
+       SERVER_NAME: SFORA Fun Server
+       PUID: 4711
+       PGID: 4711
+       # GAME_PARAMS: -savedir /serverdata/serverfiles/:/home/steam/enshrouded
+       STEAMCMD_ARGS: validate
+       SERVER_ROLE_0_NAME: Admins
+       SERVER_ROLE_0_PASSWORD: ${ENSHROUDED_ADMIN_PWD}
+       SERVER_ROLE_0_CAN_KICK_BAN: true
+       SERVER_ROLE_0_CAN_ACCESS_INVENTORIES: true
+       SERVER_ROLE_0_CAN_EDIT_WORLD: true
+       SERVER_ROLE_0_CAN_EDIT_BASE: true
+       SERVER_ROLE_0_CAN_EXTEND_BASE: true
+       SERVER_ROLE_0_RESERVED_SLOTS: 1
+       SERVER_ROLE_1_NAME: Friends
+       SERVER_ROLE_1_PASSWORD: ${ENSHROUDED_FRIEND_PWD}
+       SERVER_ROLE_1_CAN_ACCESS_INVENTORIES: true
+       SERVER_ROLE_1_CAN_EDIT_WORLD: true
+       SERVER_ROLE_1_CAN_EDIT_BASE: true
+       SERVER_ROLE_1_CAN_EXTEND_BASE: true
+       SERVER_ROLE_1_RESERVED_SLOTS: 3
+       SERVER_ROLE_2_NAME: Guests
+       SERVER_ROLE_2_PASSWORD: ${ENSHROUDED_GUEST_PWD}
+     volumes:
+       - type: bind
+         source: ${APP_PATH}/enshrouded
+         target: /home/steam/enshrouded
+         bind:
+           create_host_path: true
+     deploy:
+       replicas: 0
+       restart_policy:
+         <<: *restart-policy
+         window: 5m
+
+         
 networks:
   infra:
     name: infra_default
@@ -256,5 +448,3 @@ volumes:
   redbot_data:
     external: true
     name: redbot_data
-  arma_steamcmd_data:
-    name: arma_steamcmd_data

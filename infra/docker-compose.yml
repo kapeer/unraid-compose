@@ -35,7 +35,7 @@ services:
     ports:
       - 53:53/tcp
       - 53:53/udp
-      - 9102:80/tcp
+      - 6102:80/tcp
     dns:
       - 127.0.0.1
       - 1.1.1.1
@@ -59,7 +59,7 @@ services:
     hostname: ddns-updater
     network_mode: bridge
     ports:
-      - 8800:8000/tcp
+      - 5800:8000/tcp
     volumes:
       - ddns_updater_data:/updater/data
     environment:
@@ -74,10 +74,11 @@ services:
       - HTTP_TIMEOUT=10s
       # Web UI
       - LISTENING_ADDRESS=:8000
-      - ROOT_URL=/
+      - ROOT_URL=/ddns
       # Backup
       - BACKUP_PERIOD=0 # 0 to disable
       - BACKUP_DIRECTORY=/updater/data
+      - RESOLVER_ADDRESS=1.1.1.1:53
 
   nginx-proxy-manager:
     image: 'jc21/nginx-proxy-manager:latest'
@@ -136,9 +137,7 @@ services:
     environment:
       <<: *user
       OPENVPN_PROVIDER: ${VPN_PROVIDER}
-      # OPENVPN_CONFIG: Luxembourg-UDP
       OPENVPN_CONFIG: ${VPN_CONFIG}
-      # OPENVPN_CONFIG: Belgium1-UDP
       OPENVPN_USERNAME: ${VPN_USERNAME}
       OPENVPN_PASSWORD: ${VPN_PASSWORD}
       LOCAL_NETWORK: ${LOCAL_NETWORK:-192.168.0.0/22}
@@ -170,6 +169,7 @@ services:
       TRANSMISSION_WEB_UI: flood-for-transmission
       WEBPROXY_ENABLED: "true"
       WEBPROXY_PORT: 8888
+      OPENVPN_OPTS: --inactive 3600 --ping 10 --ping-exit 60
     volumes:
       #- /mnt/user/appdata/vpn:/etc/openvpn/custom
       - transmission_config:/config
@@ -181,23 +181,11 @@ services:
         max-size: 10m
     deploy:
       restart_policy:
-        <<: *restart-policy
+        condition: always
         window: 5m
       resources:
         limits:
           memory: 6G
-    
-  transmission-proxy:
-    image: haugene/transmission-openvpn-proxy
-    container_name: transmission-proxy
-    hostname: transmission-proxy
-    #links:
-    #  - transmission:transmission
-    ports:
-      - 9291:8080
-    restart: unless-stopped
-    depends_on:
-      - transmission
 
   airdcpp:
     image: gangefors/airdcpp-webclient
@@ -230,8 +218,6 @@ services:
     environment:
       <<: *user
       HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
-      # GF_SERVER_ROOT_URL: https://kapeer.no-ip.info/homepage
-      # GF_SERVER_DOMAIN: https://kapeer.no-ip.info/
     deploy:
       restart_policy:
         <<: *restart-policy
@@ -294,24 +280,45 @@ services:
       com.docker-tc.limit: 15mbps
     restart: unless-stopped
 
-  neko-tor:
-    image: ghcr.io/m1k1o/neko/tor-browser:latest
-    hostname: neko-tor
-    container_name: neko-tor
-    shm_size: "2gb"
-    ports:
-      - "9081:8080"
-      - "56300-56400:56300-56400/udp"
+  vscode:
+    image: linuxserver/code-server:latest
+    hostname: vscode
+    container_name: vscode
     environment:
-      NEKO_DESKTOP_SCREEN: 1920x1080@30
-      NEKO_WEBRTC_EPR: "56300-56400"
-      NEKO_WEBRTC_NAT1TO1: ${NEKO_WEBRTC_NAT1TO1}
-      NEKO_MEMBER_MULTIUSER_USER_PASSWORD: ${NEKO_USER_PASSWORD}
-      NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD: ${NEKO_ADMIN_PASSWORD}
-    deploy:
-      replicas: 0
-      restart_policy:
-        <<: *restart-policy
+      <<: *tz
+      PUID: ${PUID:-1000}
+      PGID: 100
+      PASSWORD: ${VSCODE_PASSWORD}
+      SUDO_PASSWORD: ${VSCODE_SUDO_PASSWORD}
+      DOCKER_HOST: unix:///var/run/docker.sock
+      OPEN_WEBUI_API_KEY: ${OPEN_WEBUI_API_KEY}
+      PROXY_DOMAIN: code.${DOMAIN}
+      DOCKER_MODS: "linuxserver/mods:universal-docker"
+      ND_MCP_BEARER_TOKEN: ${NETDATA_MCP_BEARER_TOKEN}
+    volumes:
+      - vscode_data:/config
+      - /mnt/user:/unraid
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 3443:8443
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    hostname: searxng
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - 3008:8080
+    volumes:
+      - searxng_data:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+
+networks:
+  br0:
+    name: br0
+    external: true
 
 volumes:
   pihole_data: &external-volume
@@ -350,4 +357,11 @@ volumes:
   filebrowser_data:
     name: filebrowser_data
   filebrowser_db:
+    <<: *external-volume
     name: filebrowser_db
+  vscode_data:
+    name: vscode_data
+  searxng_data:
+    name: searxng_data
+  # kasm_profiles:
+  #   name: kasm_profiles

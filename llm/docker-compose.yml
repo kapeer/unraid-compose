@@ -42,7 +42,7 @@ services:
     environment:
       WEBUI_URL: ${WEBUI_URL}
       OLLAMA_BASE_URL: http://ollama:11434
-      WEBUI_SECRET_KEY: ${WEBUI_SECRET}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET} # Add a random string in .env
     volumes:
       - open-webui_data:/app/backend/data
     depends_on:
@@ -78,30 +78,12 @@ services:
               device_ids: ['GPU-7051bae6-ad9a-9abf-cf2e-b22426960ec7']
               capabilities: [gpu]
 
-  piper-tts:
-    image: kap33r/piper1-gpl:latest
-    # image: rhasspy/wyoming-piper:latest
-    container_name: piper-tts
-    hostname: piper-tts
-    ports:
-      - 5000:5000
-      # - 10200:10200
-    networks:
-      - llm
-    volumes:
-      - /mnt/user/appdata/llm/tts:/data
-    command: server -m pl_PL-gosia-medium
-    # command: --uri 'tcp://0.0.0.0:10200' --voice pl_PL-gosia-medium
-    restart: always
-    deploy:
-      replicas: 0
-
   comfyui:
     image: ghcr.io/ai-dock/comfyui:latest-cuda
     hostname: comfyui
     container_name: comfyui
     ports:
-      - 7188:8188
+      - 8188:8188
       - 1111:1111
     networks:
       - llm
